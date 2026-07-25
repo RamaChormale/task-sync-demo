@@ -1,22 +1,34 @@
 import { useState } from 'react';
 import { useTasks } from '../hooks/useTasks';
+import { useToast } from '../hooks/useToast';
 import Button from '../components/common/Button';
 import Modal from '../components/common/Modal';
 import Loader from '../components/common/Loader';
 import EmptyState from '../components/common/EmptyState';
+import Toast from '../components/common/Toast';
 import TaskCard from '../components/tasks/TaskCard';
 import TaskTable from '../components/tasks/TaskTable';
 import TaskForm from '../components/tasks/TaskForm';
+import SyncMetrics from '../components/tasks/SyncMetrics';
+import SyncActivity from '../components/tasks/SyncActivity';
+import { useSyncActivity } from '../hooks/useSyncActivity';
 
 const VIEWS = { grid: 'grid', table: 'table' };
 
 export default function Dashboard() {
-  const { tasks, loading, error, mutating, fetchTasks, createTask, updateTask, deleteTask } = useTasks();
+  const { toasts, addToast, dismissToast } = useToast();
+
+  const { tasks, loading, error, mutating, fetchTasks, createTask, updateTask, deleteTask, resolveConflict } = useTasks({
+    onDuplicate: (msg) => addToast(msg, 'info'),
+    // Called when the server returns conflict:true on an update
+    onConflict: (task) => addToast(`⚠️ Conflict detected on "${task.title}" — please resolve below`, 'warning'),
+  });
 
   const [view, setView] = useState(VIEWS.grid);
   const [modal, setModal] = useState(null); // null | 'create' | 'edit' | 'delete'
   const [selected, setSelected] = useState(null);
   const [formError, setFormError] = useState('');
+  const [resolving, setResolving] = useState(false);
 
   const openCreate = () => { setSelected(null); setFormError(''); setModal('create'); };
   const openEdit = (task) => { setSelected(task); setFormError(''); setModal('edit'); };
@@ -26,19 +38,39 @@ export default function Dashboard() {
   const handleCreate = async (data) => {
     const res = await createTask(data);
     if (res.success) closeModal();
-    else setFormError(res.error);
+    else if (res.error) setFormError(res.error);
   };
 
   const handleUpdate = async (data) => {
     const res = await updateTask(selected._id, data);
-    if (res.success) closeModal();
-    else setFormError(res.error);
+    if (res.success) {
+      if (!res.conflict) closeModal(); // keep modal open if conflict so user sees it
+    } else if (res.versionConflict) {
+      // Optimistic lock failure — tell user to refresh
+      setFormError('This task was modified by another request. Please close and refresh.');
+    } else if (res.error) {
+      setFormError(res.error);
+    }
   };
 
   const handleDelete = async () => {
     await deleteTask(selected._id);
     closeModal();
   };
+
+  // Called from TaskCard (grid) or TaskTable (table) when user picks Keep Local / Keep GitHub
+  const handleResolveConflict = async (id, resolution) => {
+    setResolving(true);
+    const res = await resolveConflict(id, resolution);
+    setResolving(false);
+    if (res.success) {
+      addToast(`✅ Conflict resolved — kept ${resolution} version`, 'success');
+    } else {
+      addToast(`Failed to resolve conflict: ${res.error}`, 'error');
+    }
+  };
+
+  const { metrics, activities, loading: syncLoading, error: syncError } = useSyncActivity();
 
   const syncedCount = tasks.filter((t) => t.syncStatus === 'synced').length;
   const overallSync = tasks.length === 0 ? 'idle' : syncedCount === tasks.length ? 'synced' : 'partial';
@@ -77,6 +109,12 @@ export default function Dashboard() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Sync Metrics */}
+        <SyncMetrics metrics={metrics} loading={syncLoading} />
+
+        {/* Sync Activity */}
+        <SyncActivity activities={activities} loading={syncLoading} error={syncError} />
+
         {/* Stats Row */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
           {[
@@ -151,11 +189,24 @@ export default function Dashboard() {
         ) : view === VIEWS.grid ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {tasks.map((task) => (
-              <TaskCard key={task._id} task={task} onEdit={openEdit} onDelete={openDelete} />
+              <TaskCard
+                key={task._id}
+                task={task}
+                onEdit={openEdit}
+                onDelete={openDelete}
+                onResolveConflict={handleResolveConflict}
+                resolving={resolving}
+              />
             ))}
           </div>
         ) : (
-          <TaskTable tasks={tasks} onEdit={openEdit} onDelete={openDelete} />
+          <TaskTable
+            tasks={tasks}
+            onEdit={openEdit}
+            onDelete={openDelete}
+            onResolveConflict={handleResolveConflict}
+            resolving={resolving}
+          />
         )}
       </main>
 
@@ -181,6 +232,8 @@ export default function Dashboard() {
           <Button variant="danger" size="md" loading={mutating} onClick={handleDelete}>Delete Task</Button>
         </div>
       </Modal>
+
+      <Toast toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

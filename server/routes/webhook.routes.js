@@ -7,9 +7,8 @@ const verifyGithubWebhook = require("../middleware/githubWebhook.middleware");
 
 
 router.post(
-    "/github",
-    verifyGithubWebhook,
-    webhookController.githubWebhook
+  "/github",
+  webhookController.githubWebhook
 );
 
 
