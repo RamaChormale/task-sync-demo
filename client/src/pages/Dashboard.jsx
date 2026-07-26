@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useTasks } from '../hooks/useTasks';
 import { useToast } from '../hooks/useToast';
 import Button from '../components/common/Button';
@@ -19,6 +19,7 @@ const FILTERS = [
   { key: 'closed', label: 'Closed Tasks' },
   { key: 'all',    label: 'All Tasks' },
 ];
+const PAGE_SIZE = 6;
 
 export default function Dashboard() {
   const { toasts, addToast, dismissToast } = useToast();
@@ -32,10 +33,11 @@ export default function Dashboard() {
   });
 
   const [view, setView] = useState(VIEWS.grid);
-  const [modal, setModal] = useState(null); // null | 'create' | 'edit' | 'close'
+  const [modal, setModal] = useState(null);
   const [selected, setSelected] = useState(null);
   const [formError, setFormError] = useState('');
   const [resolving, setResolving] = useState(false);
+  const [page, setPage] = useState(1);
 
   const openCreate  = () => { setSelected(null); setFormError(''); setModal('create'); };
   const openEdit    = (task) => { setSelected(task); setFormError(''); setModal('edit'); };
@@ -49,7 +51,9 @@ export default function Dashboard() {
   };
 
   const handleUpdate = async (data) => {
-    const res = await updateTask(selected._id, data);
+    // Always read the live version from tasks state, not the stale selected snapshot
+    const liveTask = tasks.find((t) => t._id === selected._id);
+    const res = await updateTask(selected._id, { ...data, version: liveTask?.version ?? selected.version });
     if (res.success) {
       if (!res.conflict) closeModal();
     } else if (res.versionConflict) {
@@ -84,6 +88,22 @@ export default function Dashboard() {
 
   const syncedCount = tasks.filter((t) => t.syncStatus === 'synced').length;
   const overallSync = tasks.length === 0 ? 'idle' : syncedCount === tasks.length ? 'synced' : 'partial';
+
+  const totalPages = Math.max(1, Math.ceil(tasks.length / PAGE_SIZE));
+  const pagedTasks = useMemo(
+    () => tasks.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [tasks, page]
+  );
+
+  // Tab counts — active tab is always exact (tasks.length), all tab uses metrics.totalTasks
+  const tabCounts = {
+    open:   filter === 'open'   ? tasks.length : null,
+    closed: filter === 'closed' ? tasks.length : null,
+    all:    filter === 'all'    ? tasks.length : (metrics?.totalTasks ?? null),
+  };
+
+  // Reset to page 1 whenever filter changes
+  const handleFilterChange = (f) => { setPage(1); changeFilter(f); };
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -170,14 +190,23 @@ export default function Dashboard() {
           {FILTERS.map(({ key, label }) => (
             <button
               key={key}
-              onClick={() => changeFilter(key)}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${
+              onClick={() => handleFilterChange(key)}
+              className={`inline-flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${
                 filter === key
                   ? 'border-indigo-600 text-indigo-600'
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
               }`}
             >
               {label}
+              {tabCounts[key] !== null && (
+                <span className={`inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-xs font-semibold ${
+                  filter === key
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-gray-100 text-gray-500'
+                }`}>
+                  {tabCounts[key]}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -204,7 +233,7 @@ export default function Dashboard() {
           />
         ) : view === VIEWS.grid ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {tasks.map((task) => (
+            {pagedTasks.map((task) => (
               <TaskCard
                 key={task._id}
                 task={task}
@@ -217,12 +246,71 @@ export default function Dashboard() {
           </div>
         ) : (
           <TaskTable
-            tasks={tasks}
+            tasks={pagedTasks}
             onEdit={openEdit}
             onClose={openClose}
             onResolveConflict={handleResolveConflict}
             resolving={resolving}
           />
+        )}
+
+        {/* ── Pagination ── */}
+        {!loading && tasks.length > PAGE_SIZE && (
+          <div className="flex items-center justify-between mt-6">
+            {/* Left: showing X–Y of Z */}
+            <p className="text-sm text-gray-500">
+              Showing <span className="font-medium text-gray-700">{(page - 1) * PAGE_SIZE + 1}</span>–<span className="font-medium text-gray-700">{Math.min(page * PAGE_SIZE, tasks.length)}</span> of <span className="font-medium text-gray-700">{tasks.length}</span> tasks
+            </p>
+
+            {/* Right: page buttons */}
+            <div className="flex items-center gap-1">
+              {/* Prev */}
+              <button
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page === 1}
+                className="p-2 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+              </button>
+
+              {/* Page numbers */}
+              {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => {
+                // Show first, last, current, and neighbours — collapse others to …
+                const show = p === 1 || p === totalPages || Math.abs(p - page) <= 1;
+                const isDot = !show;
+                if (isDot && (p === 2 || p === totalPages - 1)) {
+                  return <span key={p} className="px-1 text-gray-400 text-sm">…</span>;
+                }
+                if (isDot) return null;
+                return (
+                  <button
+                    key={p}
+                    onClick={() => setPage(p)}
+                    className={`w-9 h-9 rounded-lg text-sm font-medium transition-colors border ${
+                      p === page
+                        ? 'bg-indigo-600 text-white border-indigo-600'
+                        : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+                    }`}
+                  >
+                    {p}
+                  </button>
+                );
+              })}
+
+              {/* Next */}
+              <button
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page === totalPages}
+                className="p-2 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            </div>
+          </div>
         )}
       </main>
 

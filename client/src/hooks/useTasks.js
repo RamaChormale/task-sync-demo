@@ -56,8 +56,10 @@ export function useTasks({ onDuplicate, onConflict } = {}) {
     inFlight.current.add(key);
     setMutating(true);
     try {
+      // Always use the latest version from live state — never trust the caller's copy
       const current = tasks.find((t) => t._id === id);
-      const payload = { ...data, version: current?.version };
+      const { version: _ignored, ...rest } = data; // strip any version the caller passed
+      const payload = { ...rest, version: current?.version };
       const res = await taskService.update(id, payload);
 
       if (res.conflict) {
