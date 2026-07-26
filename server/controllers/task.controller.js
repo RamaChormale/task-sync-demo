@@ -59,9 +59,14 @@ exports.createTask = async (req, res) => {
 };
 
 // ─── Get All Tasks ────────────────────────────────────────────────────────────
+// Supports ?filter=open|closed|all  (default: all)
 exports.getTasks = async (req, res) => {
   try {
-    const tasks = await Task.find().sort({ createdAt: -1 });
+    const { filter } = req.query;
+    let query = {};
+    if (filter === 'open')   query = { isOpen: true };
+    if (filter === 'closed') query = { isOpen: false };
+    const tasks = await Task.find(query).sort({ createdAt: -1 });
     res.status(200).json({ success: true, count: tasks.length, data: tasks });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -274,23 +279,60 @@ exports.resolveConflict = async (req, res) => {
   }
 };
 
-// ─── Delete Task ──────────────────────────────────────────────────────────────
-exports.deleteTask = async (req, res) => {
+// ─── Close Task ───────────────────────────────────────────────────────────────
+// PATCH /api/tasks/:id/close
+// Sets status="closed", isOpen=false, closes GitHub issue. Record is preserved.
+exports.closeTask = async (req, res) => {
   try {
     const task = await Task.findById(req.params.id);
     if (!task) {
       return res.status(404).json({ success: false, message: "Task not found" });
     }
 
-    if (task.githubIssueNumber) {
-      await closeIssue(task.githubIssueNumber).catch((err) =>
-        console.error("GitHub close failed:", err.message)
-      );
+    if (task.status === "closed") {
+      return res.status(400).json({ success: false, message: "Task is already closed" });
     }
 
-    await task.deleteOne();
+    task.status = "closed";
+    task.isOpen = false;
+    task.closedAt = new Date();
+    task.version += 1;
 
-    res.json({ success: true, message: "Task deleted successfully" });
+    // Close the linked GitHub issue with retry + backoff
+    if (task.githubIssueNumber) {
+      try {
+        await retry(() => closeIssue(task.githubIssueNumber), {
+          onRetry: async (attempt, waitMs) => {
+            await SyncActivity.create({
+              type: "retry",
+              message: `Retry attempt ${attempt} closing GitHub issue #${task.githubIssueNumber} (waiting ${waitMs}ms)`,
+              taskId: task._id,
+            }).catch(() => {});
+          },
+        });
+        task.syncStatus = "synced";
+        task.lastSyncedAt = new Date();
+
+        await SyncActivity.create({
+          type: "synced",
+          message: `Task "${task.title}" closed — GitHub Issue #${task.githubIssueNumber} closed`,
+          taskId: task._id,
+        }).catch(() => {});
+      } catch (githubError) {
+        console.error("GitHub close failed:", githubError.message);
+        task.syncStatus = "error";
+
+        await SyncActivity.create({
+          type: "error",
+          message: `Task "${task.title}" closed locally but GitHub sync failed: ${githubError.message}`,
+          taskId: task._id,
+        }).catch(() => {});
+      }
+    }
+
+    await task.save();
+
+    res.json({ success: true, message: "Task closed successfully", data: task });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

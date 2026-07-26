@@ -14,26 +14,33 @@ import SyncActivity from '../components/tasks/SyncActivity';
 import { useSyncActivity } from '../hooks/useSyncActivity';
 
 const VIEWS = { grid: 'grid', table: 'table' };
+const FILTERS = [
+  { key: 'open',   label: 'Open Tasks' },
+  { key: 'closed', label: 'Closed Tasks' },
+  { key: 'all',    label: 'All Tasks' },
+];
 
 export default function Dashboard() {
   const { toasts, addToast, dismissToast } = useToast();
 
-  const { tasks, loading, error, mutating, fetchTasks, createTask, updateTask, deleteTask, resolveConflict } = useTasks({
+  const {
+    tasks, loading, error, mutating, filter,
+    fetchTasks, changeFilter, createTask, updateTask, closeTask, resolveConflict,
+  } = useTasks({
     onDuplicate: (msg) => addToast(msg, 'info'),
-    // Called when the server returns conflict:true on an update
     onConflict: (task) => addToast(`⚠️ Conflict detected on "${task.title}" — please resolve below`, 'warning'),
   });
 
   const [view, setView] = useState(VIEWS.grid);
-  const [modal, setModal] = useState(null); // null | 'create' | 'edit' | 'delete'
+  const [modal, setModal] = useState(null); // null | 'create' | 'edit' | 'close'
   const [selected, setSelected] = useState(null);
   const [formError, setFormError] = useState('');
   const [resolving, setResolving] = useState(false);
 
-  const openCreate = () => { setSelected(null); setFormError(''); setModal('create'); };
-  const openEdit = (task) => { setSelected(task); setFormError(''); setModal('edit'); };
-  const openDelete = (task) => { setSelected(task); setModal('delete'); };
-  const closeModal = () => { setModal(null); setSelected(null); setFormError(''); };
+  const openCreate  = () => { setSelected(null); setFormError(''); setModal('create'); };
+  const openEdit    = (task) => { setSelected(task); setFormError(''); setModal('edit'); };
+  const openClose   = (task) => { setSelected(task); setModal('close'); };
+  const closeModal  = () => { setModal(null); setSelected(null); setFormError(''); };
 
   const handleCreate = async (data) => {
     const res = await createTask(data);
@@ -44,21 +51,24 @@ export default function Dashboard() {
   const handleUpdate = async (data) => {
     const res = await updateTask(selected._id, data);
     if (res.success) {
-      if (!res.conflict) closeModal(); // keep modal open if conflict so user sees it
+      if (!res.conflict) closeModal();
     } else if (res.versionConflict) {
-      // Optimistic lock failure — tell user to refresh
       setFormError('This task was modified by another request. Please close and refresh.');
     } else if (res.error) {
       setFormError(res.error);
     }
   };
 
-  const handleDelete = async () => {
-    await deleteTask(selected._id);
+  const handleClose = async () => {
+    const res = await closeTask(selected._id);
     closeModal();
+    if (res.success) {
+      addToast(`✅ "${selected.title}" closed and GitHub issue updated`, 'success');
+    } else {
+      addToast(`Failed to close task: ${res.error}`, 'error');
+    }
   };
 
-  // Called from TaskCard (grid) or TaskTable (table) when user picks Keep Local / Keep GitHub
   const handleResolveConflict = async (id, resolution) => {
     setResolving(true);
     const res = await resolveConflict(id, resolution);
@@ -90,7 +100,6 @@ export default function Dashboard() {
           </div>
 
           <div className="flex items-center gap-4">
-            {/* GitHub Sync Status */}
             <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-100 text-xs font-medium text-gray-600">
               <span className={`w-2 h-2 rounded-full ${overallSync === 'synced' ? 'bg-green-500' : overallSync === 'partial' ? 'bg-yellow-400' : 'bg-gray-400'}`} />
               <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
@@ -98,21 +107,13 @@ export default function Dashboard() {
               </svg>
               {overallSync === 'synced' ? 'All Synced' : overallSync === 'partial' ? `${syncedCount}/${tasks.length} Synced` : 'No Tasks'}
             </div>
-
-            {/* User Avatar */}
-            <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-semibold text-sm">
-              U
-            </div>
+            <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-semibold text-sm">U</div>
           </div>
         </div>
       </header>
 
-      {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Sync Metrics */}
         <SyncMetrics metrics={metrics} loading={syncLoading} />
-
-        {/* Sync Activity */}
         <SyncActivity activities={activities} loading={syncLoading} error={syncError} />
 
         {/* Stats Row */}
@@ -121,7 +122,7 @@ export default function Dashboard() {
             { label: 'Total Tasks', value: tasks.length, color: 'text-gray-800' },
             { label: 'Open', value: tasks.filter((t) => t.status === 'open').length, color: 'text-blue-600' },
             { label: 'Completed', value: tasks.filter((t) => t.status === 'completed').length, color: 'text-green-600' },
-            { label: 'Synced', value: syncedCount, color: 'text-indigo-600' },
+            { label: 'Closed', value: tasks.filter((t) => t.status === 'closed').length, color: 'text-gray-500' },
           ].map(({ label, value, color }) => (
             <div key={label} className="bg-white rounded-xl border border-gray-200 p-4">
               <p className="text-xs text-gray-500 font-medium">{label}</p>
@@ -131,20 +132,16 @@ export default function Dashboard() {
         </div>
 
         {/* Toolbar */}
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <h1 className="text-xl font-bold text-gray-900">Tasks</h1>
           <div className="flex items-center gap-2">
             {/* View Toggle */}
             <div className="flex rounded-lg border border-gray-200 overflow-hidden">
               {[
-                { key: VIEWS.grid, icon: 'M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z' },
+                { key: VIEWS.grid,  icon: 'M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z' },
                 { key: VIEWS.table, icon: 'M3 10h18M3 14h18M3 6h18M3 18h18' },
               ].map(({ key, icon }) => (
-                <button
-                  key={key}
-                  onClick={() => setView(key)}
-                  className={`p-2 transition-colors ${view === key ? 'bg-indigo-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'}`}
-                >
+                <button key={key} onClick={() => setView(key)} className={`p-2 transition-colors ${view === key ? 'bg-indigo-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'}`}>
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={icon} />
                   </svg>
@@ -152,7 +149,7 @@ export default function Dashboard() {
               ))}
             </div>
 
-            <Button variant="secondary" size="md" onClick={fetchTasks} loading={loading}>
+            <Button variant="secondary" size="md" onClick={() => fetchTasks()} loading={loading}>
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
@@ -168,6 +165,23 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {/* ── Filter Tabs ── */}
+        <div className="flex items-center gap-1 mb-6 border-b border-gray-200">
+          {FILTERS.map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => changeFilter(key)}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${
+                filter === key
+                  ? 'border-indigo-600 text-indigo-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
         {/* Error Banner */}
         {error && (
           <div className="mb-6 flex items-center gap-3 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
@@ -175,7 +189,7 @@ export default function Dashboard() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             {error}
-            <button onClick={fetchTasks} className="ml-auto text-red-600 underline font-medium">Retry</button>
+            <button onClick={() => fetchTasks()} className="ml-auto text-red-600 underline font-medium">Retry</button>
           </div>
         )}
 
@@ -184,7 +198,9 @@ export default function Dashboard() {
           <Loader message="Fetching tasks..." />
         ) : tasks.length === 0 ? (
           <EmptyState
-            action={<Button variant="primary" size="md" onClick={openCreate}>Create First Task</Button>}
+            title={filter === 'closed' ? 'No closed tasks' : filter === 'open' ? 'No open tasks' : 'No tasks yet'}
+            description={filter === 'open' ? 'Create your first task to get started.' : 'Nothing to show here.'}
+            action={filter !== 'closed' && <Button variant="primary" size="md" onClick={openCreate}>Create First Task</Button>}
           />
         ) : view === VIEWS.grid ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -193,7 +209,7 @@ export default function Dashboard() {
                 key={task._id}
                 task={task}
                 onEdit={openEdit}
-                onDelete={openDelete}
+                onClose={openClose}
                 onResolveConflict={handleResolveConflict}
                 resolving={resolving}
               />
@@ -203,7 +219,7 @@ export default function Dashboard() {
           <TaskTable
             tasks={tasks}
             onEdit={openEdit}
-            onDelete={openDelete}
+            onClose={openClose}
             onResolveConflict={handleResolveConflict}
             resolving={resolving}
           />
@@ -222,14 +238,30 @@ export default function Dashboard() {
         <TaskForm initial={selected} onSubmit={handleUpdate} onCancel={closeModal} loading={mutating} />
       </Modal>
 
-      {/* Delete Confirmation Modal */}
-      <Modal isOpen={modal === 'delete'} onClose={closeModal} title="Delete Task">
-        <p className="text-sm text-gray-600 mb-6">
-          Are you sure you want to delete <span className="font-semibold text-gray-800">"{selected?.title}"</span>? This will also close the linked GitHub issue.
-        </p>
-        <div className="flex justify-end gap-2">
-          <Button variant="secondary" size="md" onClick={closeModal}>Cancel</Button>
-          <Button variant="danger" size="md" loading={mutating} onClick={handleDelete}>Delete Task</Button>
+      {/* Close Confirmation Modal */}
+      <Modal isOpen={modal === 'close'} onClose={closeModal} title="Close Task">
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 p-3 bg-orange-50 border border-orange-200 rounded-lg">
+            <svg className="w-5 h-5 text-orange-500 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <div className="text-sm text-orange-700">
+              <p className="font-medium">This will close the task and its GitHub issue.</p>
+              <p className="mt-0.5 text-orange-600">The task history will be preserved — nothing is deleted.</p>
+            </div>
+          </div>
+          <p className="text-sm text-gray-600">
+            Close <span className="font-semibold text-gray-800">"{selected?.title}"</span>?
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" size="md" onClick={closeModal}>Cancel</Button>
+            <Button variant="primary" size="md" loading={mutating} onClick={handleClose}>
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Close Task
+            </Button>
+          </div>
         </div>
       </Modal>
 

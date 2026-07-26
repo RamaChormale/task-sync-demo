@@ -7,7 +7,7 @@ const {
   getTasks,
   getTaskById,
   updateTask,
-  deleteTask,
+  closeTask,
   resolveConflict,
 } = require("../controllers/task.controller");
 
@@ -15,8 +15,7 @@ router.post("/", createTask);
 router.get("/", getTasks);
 router.get("/:id", getTaskById);
 router.patch("/:id", updateTask);
-router.delete("/:id", deleteTask);
-// POST /api/tasks/:id/resolve — resolve a conflict by choosing local or github version
+router.patch("/:id/close", closeTask);          // close — preserves record
 router.post("/:id/resolve", resolveConflict);
 
 module.exports = router;

@@ -9,15 +9,18 @@ import GithubIssueModal from './GithubIssueModal';
 const formatDate = (d) =>
   d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
 
-export default function TaskCard({ task, onEdit, onDelete, onResolveConflict, resolving }) {
+export default function TaskCard({ task, onEdit, onClose, onResolveConflict, resolving }) {
   const [showIssue, setShowIssue] = useState(false);
+  const isClosed = task.status === 'closed';
 
   return (
     <>
-      <Card className="p-5 flex flex-col gap-3 hover:shadow-md transition-shadow">
+      <Card className={`p-5 flex flex-col gap-3 hover:shadow-md transition-shadow ${isClosed ? 'opacity-75' : ''}`}>
         <div className="flex items-start justify-between gap-2">
           <div className="flex-1 min-w-0">
-            <h3 className="font-semibold text-gray-800 truncate">{task.title}</h3>
+            <h3 className={`font-semibold truncate ${isClosed ? 'text-gray-400 line-through' : 'text-gray-800'}`}>
+              {task.title}
+            </h3>
             {task.description && (
               <p className="text-sm text-gray-500 mt-0.5 line-clamp-2">{task.description}</p>
             )}
@@ -37,7 +40,10 @@ export default function TaskCard({ task, onEdit, onDelete, onResolveConflict, re
             </div>
           )}
           <div><span className="font-medium text-gray-600">Synced: </span>{formatDate(task.lastSyncedAt)}</div>
-          <div><span className="font-medium text-gray-600">Created: </span>{formatDate(task.createdAt)}</div>
+          {isClosed
+            ? <div><span className="font-medium text-gray-600">Closed: </span>{formatDate(task.closedAt)}</div>
+            : <div><span className="font-medium text-gray-600">Created: </span>{formatDate(task.createdAt)}</div>
+          }
         </div>
 
         {task.syncStatus === 'conflict' && (
@@ -45,20 +51,36 @@ export default function TaskCard({ task, onEdit, onDelete, onResolveConflict, re
         )}
 
         <div className="flex items-center gap-2 pt-1 border-t border-gray-100">
-          <Button variant="ghost" size="sm" onClick={() => onEdit(task)}>
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-            </svg>
-            Edit
-          </Button>
-          <Button variant="ghost" size="sm" className="text-red-500 hover:bg-red-50" onClick={() => onDelete(task)}>
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-            </svg>
-            Delete
-          </Button>
+          {/* Edit only available on open tasks */}
+          {!isClosed && (
+            <Button variant="ghost" size="sm" onClick={() => onEdit(task)}>
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+              </svg>
+              Edit
+            </Button>
+          )}
 
-          {/* "View Issue" now opens the modal instead of navigating away */}
+          {/* Close Task — only shown on non-closed tasks */}
+          {!isClosed && (
+            <Button variant="ghost" size="sm" className="text-orange-600 hover:bg-orange-50" onClick={() => onClose(task)}>
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Close Task
+            </Button>
+          )}
+
+          {/* Closed label */}
+          {isClosed && (
+            <span className="inline-flex items-center gap-1 text-xs text-gray-400 font-medium">
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Closed
+            </span>
+          )}
+
           {task.githubIssueNumber && (
             <button
               onClick={() => setShowIssue(true)}
@@ -73,11 +95,7 @@ export default function TaskCard({ task, onEdit, onDelete, onResolveConflict, re
         </div>
       </Card>
 
-      <GithubIssueModal
-        task={task}
-        isOpen={showIssue}
-        onClose={() => setShowIssue(false)}
-      />
+      <GithubIssueModal task={task} isOpen={showIssue} onClose={() => setShowIssue(false)} />
     </>
   );
 }

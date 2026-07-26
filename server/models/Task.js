@@ -6,9 +6,12 @@ const taskSchema = new mongoose.Schema(
     description: { type: String, default: "" },
     status: {
       type: String,
-      enum: ["open", "in_progress", "completed"],
+      enum: ["open", "in_progress", "completed", "closed"],
       default: "open",
     },
+
+    // Set when a task is closed — preserves history without deletion
+    closedAt: { type: Date, default: null },
 
     syncStatus: {
       type: String,
@@ -23,6 +26,7 @@ const taskSchema = new mongoose.Schema(
     version: { type: Number, default: 1 },
 
     lastSyncedAt: { type: Date, default: null },
+    isOpen: { type: Boolean, default: true }, // false when status === "closed"
 
     // Conflict resolution — stores both versions when conflict is detected
     conflictVersions: {
